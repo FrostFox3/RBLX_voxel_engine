@@ -1,0 +1,240 @@
+--!native
+
+--[[ PRE-DEFINE ]]
+local ram:number
+local ram2:number
+local v3n=vector.create
+local v3f=vector.floor
+local v3m=vector.magnitude
+local v31:vector=vector.one
+local v30:vector=vector.zero
+local v3x:vector=v3n(1,0,0)
+local v3y:vector=v3n(0,1,0)
+local v3z:vector=v3n(0,0,1)
+
+--[[ SERVICES ]]
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+--[[ PLAYER_GETS ]]
+local Player = game:GetService("Players").LocalPlayer
+local Character = Player.Character or Player.CharacterAdded
+
+--[[ MODULES ]]
+local BlockModule = require(ReplicatedStorage.BlockModule)
+
+--[[ EVENTS ]]
+local RequestChunks:RemoteEvent = ReplicatedStorage.ChunkEvents.RequestChunks
+local ReturnChunks:RemoteEvent = ReplicatedStorage.ChunkEvents.ReturnChunks
+
+--[[ CHUNKS ]]
+local Chunks:{[vector]:{[number]:Part}}={}
+
+local BlockPosition:{[number]:vector}={}
+ram=1
+for x:number=1,16,1 do
+	for y:number=1,16,1 do
+		for z:number=1,16,1 do
+			BlockPosition[ram]=v3n(x,y,z)*5
+			ram+=1
+		end
+	end
+end
+local Ch_Sphere:{[number]:vector}={}
+ram=1
+local size = 4
+for x:number=-size,size do
+	for y:number=-size,size do
+		for z:number=-size,size do
+			if (x*x+y*y+z*z)^.5<=size then
+				Ch_Sphere[ram]=v3n(x,y,z)*80
+				ram+=1
+			end
+		end
+	end
+end
+table.sort(Ch_Sphere,function(a:vector,b:vector)
+	return (a.x*a.x+a.y*a.y+a.z*a.z)^.5<(b.x*b.x+b.y*b.y+b.z*b.z)^.5
+end)
+
+local Temp:BasePart=Instance.fromExisting(ReplicatedStorage.Block)
+Temp.Position=v3y*math.huge
+
+local LocalBlockArray:{[number]:BasePart}={} -- 16^3*#Ch_Sphere+16^3
+print(#Ch_Sphere)
+warn(#Ch_Sphere*16*16)
+-- 000,000 = 64, 2^6 ; 2 states of 6 faces = 64
+
+local debris = game:GetService("Debris")
+
+local c:number = 0
+local Texture_PreString:string="rbxassetid://"
+local activeCorou:number=0
+local LoadChunk = @native function(ChunkPosition:vector,size:{[number]:{id:number,p:vector,s:vector}}):()
+	activeCorou+=1
+	local i:number=1
+	if #LocalBlockArray<=4096*2 then
+		for _:number=1,4096 do
+			LocalBlockArray[#LocalBlockArray+1]=Temp:Clone()
+		end
+	end
+	
+	local Chunk:{Part}={}
+	local CF:{CFrame}={}
+	
+	if #size>0 then
+		local v:{id:number,p:vector,s:vector}
+		for a:number=1,#size do
+			v=size[a]
+			if not LocalBlockArray[1] then
+				for _:number=1,4096 do
+					LocalBlockArray[#LocalBlockArray+1]=Temp:Clone()
+					LocalBlockArray[#LocalBlockArray].Parent=workspace.LocalBlockArray
+				end
+			end
+			Chunk[i]=LocalBlockArray[1]
+			table.remove(LocalBlockArray,1)
+			Chunk[i].Size=v.s
+			Chunk[i].Color=Color3.fromHSV(v.id,1,1)
+			
+			CF[i]=CFrame.new(ChunkPosition+v.p+v.s*.5)
+			i+=1
+			c+=1
+			if c>=512 then
+				task.wait()
+				c=0
+			end
+		end
+		workspace:BulkMoveTo(Chunk,CF,Enum.BulkMoveMode.FireCFrameChanged)
+		for _:number,v:Part in ipairs(Chunk) do
+			v.Parent=workspace.Map
+		end
+	end
+	Chunks[ChunkPosition.x.."a"..ChunkPosition.y.."a"..ChunkPosition.z]=Chunk
+	
+	activeCorou-=1
+end
+
+local Coroutines:{vector&{number}} = {}
+ReturnChunks.OnClientEvent:Connect(function(ChunkPosition:vector,Data:{[number]:{id:number,p:vector,s:vector}}) -- Player,ChunkPosition,toGrid,size
+	Coroutines[#Coroutines+1]={ChunkPosition,Data}
+	table.sort(Coroutines,function(a:{},b:{})
+		return v3m(a[1]-Character.PrimaryPart.Position-Character.PrimaryPart.AssemblyLinearVelocity*10)<v3m(b[1]-Character.PrimaryPart.Position-Character.PrimaryPart.AssemblyLinearVelocity*10)
+	end)
+end)
+
+-- dda for selection
+task.wait()
+local Last:Vector3
+local Wanted:{[number]:vector}
+local UnWanted:{[number]:vector}
+local p:vector
+local p2:vector
+local Ch_:Model
+local i_:number=0
+
+local BR_Rules = OverlapParams.new()
+BR_Rules.RespectCanCollide=false
+BR_Rules.FilterType=Enum.RaycastFilterType.Include
+BR_Rules.FilterDescendantsInstances={workspace.Map}
+local Ray_Rules = RaycastParams.new()
+Ray_Rules.RespectCanCollide=false
+Ray_Rules.FilterType=Enum.RaycastFilterType.Include
+Ray_Rules.FilterDescendantsInstances={workspace.Map}
+local Over:{Part}
+local ColisionFedelity:{Part}={}
+
+local Humanoid:Humanoid = Character.Humanoid
+game:GetService("RunService").RenderStepped:Connect(function(dt:number)
+	Over=workspace:GetPartBoundsInRadius(Character.PrimaryPart.Position,15,BR_Rules)
+	if Over~={} then
+		for i:number,v:Part in pairs(ColisionFedelity) do
+			if not table.find(Over,v) then
+				v.CanCollide=false
+				table.remove(ColisionFedelity,i)
+			end
+		end
+		for _:number,v:Part in ipairs(Over) do
+			v.CanCollide=true
+			ColisionFedelity[#ColisionFedelity+1]=v
+		end
+	end
+	if not Last or (Character.PrimaryPart.Position-Last).Magnitude>=80 then
+		Last=Character.PrimaryPart.Position
+		--warn(Last)
+		Wanted={}
+		UnWanted={}
+		
+		p=v3f(Last*.0125)*80
+		ram=1
+		for _:number,v:vector in ipairs(Ch_Sphere) do
+			p2=p+v
+			if not Chunks[p2.x.."a"..p2.y.."a"..p2.z] then
+				Chunks[p2.x.."a"..p2.y.."a"..p2.z]=0
+				Wanted[ram]=p2
+				ram+=1
+			end
+		end
+		-- math.clamp(math.floor(((p2-Last)*(p2-Last)).Magnitude*0.0000390625)*2,0,4)
+		if #Wanted>0 then
+			RequestChunks:FireServer(Wanted)
+		end
+		for i:string,v:Model in pairs(Chunks) do
+			if v3m(v3n(i:match("(.+)a(.+)a(.+)"))-p)>=80*(size+1) then
+				if type(v)=="number" then
+					v=nil
+				else
+					for _:number,block:BasePart in pairs(v) do
+						LocalBlockArray[#LocalBlockArray+1]=block
+						block.Parent=nil
+						block:ClearAllChildren()
+						if table.find(ColisionFedelity,block) then
+							table.remove(ColisionFedelity,table.find(ColisionFedelity,block))
+						end
+					end
+					Chunks[i]=nil
+				end
+			end
+		end
+	end
+	if activeCorou<=6 and #Coroutines>0 then
+		--warn(#Coroutines)
+		for i:number,v in pairs(Coroutines) do
+			coroutine.wrap(LoadChunk)(v[1],v[2])
+			table.remove(Coroutines,i)
+			if activeCorou>=6 then
+				break
+			end
+		end
+	end
+end)
+
+local FallStart:number=0
+Humanoid:GetPropertyChangedSignal("FloorMaterial"):Connect(function()
+	if Humanoid.FloorMaterial==Enum.Material.Air then
+		FallStart=Character.PrimaryPart.Position.Y
+	else
+		FallStart=-(Character.PrimaryPart.Position.Y-FallStart)-20
+		if FallStart>=5 then
+			Humanoid:TakeDamage(FallStart*FallStart*.00313)
+		end
+	end
+end)
+
+-- Player World Interactions
+
+local LIGHTOBJ=Instance.new("PointLight")
+LIGHTOBJ.Range=50
+LIGHTOBJ.Brightness=1.5
+LIGHTOBJ.Color = Color3.new(1, 0.909804, 0.72549)
+LIGHTOBJ.Enabled = true
+LIGHTOBJ.Parent=Character.HumanoidRootPart
+
+local input_ = function (i:InputObject,p:boolean):()
+	if not p then
+		if i.KeyCode==Enum.KeyCode.L then
+			LIGHTOBJ.Enabled=not LIGHTOBJ.Enabled
+		end
+	end
+end
+
+game:GetService("UserInputService").InputBegan:Connect(input_)
