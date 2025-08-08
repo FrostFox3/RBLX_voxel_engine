@@ -1,0 +1,160 @@
+local NoiseModule = require(script.Parent.NoiseModule)
+game.ServerStorage.Seed.Value=NoiseModule.hash32_33_(vector.create(os.clock(),os.time(),3),0x1FFFF)+NoiseModule.hash32_33_(vector.create(1,os.clock(),os.time()),0x1FFFF)+NoiseModule.hash32_33_(vector.create(os.time(),2,os.clock()),0x1FFFF)
+
+-- player moves, player gets positions wanted -> server returns chunks
+
+--[[
+16^3 = 4096
+2^12 = 4096
+
+4096*16=65536
+log2(4096+2^16) = 268435456
+
+- 16b
+block[]16b
+ * to make this easy we want to store all data in the same buffer, so we can just check the point
+]]
+
+--[[ SERVICES ]]
+local RunService:RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerStorage = game:GetService("ServerStorage")
+local Actor = script.Parent
+
+--[[ MODULES+ACTORS ]]
+local DataBase = require(Actor.DataBase)
+
+--[[ EVENTS ]]
+local RequestChunks:RemoteEvent = ReplicatedStorage.ChunkEvents.RequestChunks
+local ReturnChunks:RemoteEvent = ReplicatedStorage.ChunkEvents.ReturnChunks
+local Events = Actor.Events
+local NoiseCompleated:BindableEvent = Events.NoiseCompleated
+local CullCompleated:BindableEvent = Events.CullCompleated
+
+local WorkLimit:number=4096
+
+local CULL_Folder = Actor.Workers_Cull
+local Noise_Folder = Actor.Workers_Noise
+
+local Workers_Noise:{[number]:Actor}={[1]=Noise_Folder.Worker1}
+local Workers_Cull:{[number]:Actor}={[1]=CULL_Folder.Worker1}
+local Working_Noise:{[number]:number}={[1]=0}
+local Working_Cull:{[number]:number}={[1]=0}
+local no_Workers = 16
+
+for i:number=2,no_Workers,1 do
+	Workers_Noise[i]=Workers_Noise[i-1]:Clone()
+	Workers_Noise[i].Name="Worker"..i
+	Workers_Noise[i].Parent=Noise_Folder
+	Workers_Cull[i]=Workers_Cull[i-1]:Clone()
+	Workers_Cull[i].Name="Worker"..i
+	Workers_Cull[i].Parent=CULL_Folder
+	Working_Noise[i]=0
+	Working_Cull[i]=0
+end
+
+--[[
+0 : Data:{
+	[0]:number -- tells the amount of current data sets expected, if >8 then groups it in 4s
+	
+}
+]]
+-- 1 : checking noise -- return to server : server adds to DataSet_Area : Sets point to Oclusion
+-- 2 : calculateing oclusion -- return to server : server adds to DataSet_Oclusion : Sets point to Return
+-- 3 : returning chunks -- returns to player : server generates voxels to load : Player loads voxels via ID:number & Pos:number & Size:Vec3
+local Orders:{[number]:{{number}&{}}}={}
+
+Actor:BindToMessageParallel("FinishedNoise",function(id:number,UserID:number,ChunkPosition:vector,Storage:{[number]:number})
+	if not DataBase.FindChunk(ChunkPosition) then
+		DataBase.WriteData(ChunkPosition,Storage)
+	end
+	Orders[UserID][2][#Orders[UserID][2]+1]=ChunkPosition -- player voxel data
+	Working_Noise[id]-=1
+end)
+Actor:BindToMessage("FinishedCull",function(id:number,UserID:number,ChunkPosition:vector,size:{})
+	UserID=game.Players:GetPlayerByUserId(UserID)
+	if UserID then
+		ReturnChunks:FireClient(UserID,ChunkPosition,size)
+	end
+	Working_Cull[id]-=1
+end)
+
+RequestChunks.OnServerEvent:Connect(function(Player:Player,Request:{vector})
+	local h:buffer
+	warn("Player {"..Player.Name.."} wants to load {"..#Request.."} Chunks")
+	for i:number,v:vector in ipairs(Request) do
+		--Orders[Player.UserId][0]+=1 -- order count add
+		if not Orders[Player.UserId] then
+			Orders[Player.UserId]={[1]={},[2]={}}
+		end
+		h=DataBase.FindChunk(v)
+		if h then
+			Orders[Player.UserId][2][#Orders[Player.UserId][2]+1]=v
+		else
+			Orders[Player.UserId][1][#Orders[Player.UserId][1]+1]=v
+		end
+	end
+end)
+
+local sides:{[number]:vector} = { -- 26
+	[1]=vector.create(-80,0,0),[2]=vector.create(0,-80,0),[3]=vector.create(0,0,-80),
+	[4]=vector.create(80,0,0),[5]=vector.create(0,80,0),[6]=vector.create(0,0,80)
+}
+
+local tremove = table.remove
+local h:buffer|{buffer}
+local I:number
+local n:{}
+local counter:number=0
+game:GetService("RunService").Stepped:ConnectParallel(function()
+	for userId:number,v:{} in pairs(Orders) do
+		if #v[1]>0 then -- check for noise/to noise
+			for i:number,v:vector in pairs(v[1]) do -- filter orders
+				if v then
+					h=DataBase.FindChunk(v)
+					if h then
+						Orders[userId][2][#Orders[userId][2]+1]=v
+						tremove(Orders[userId][1],i)
+					else
+						I=1
+						for i:number=2,no_Workers do
+							I=Working_Noise[I]<=Working_Noise[i] and I or i
+						end
+						Working_Noise[I]+=1
+						Workers_Noise[I]:SendMessage(I,userId,v)
+						tremove(Orders[userId][1],i)
+					end
+					counter+=1
+					if counter>=16 then
+						counter=0
+						break
+					end
+				end
+			end
+		end
+		if #v[2]>0 then
+			for i:number,v:{} in pairs(v[2]) do -- filter orders
+				if v then
+					n=DataBase.FindChunk(v)
+					if n then
+						h={DataBase.FindChunk(v+sides[1]),DataBase.FindChunk(v+sides[2]),DataBase.FindChunk(v+sides[3]),DataBase.FindChunk(v+sides[4]),DataBase.FindChunk(v+sides[5]),DataBase.FindChunk(v+sides[6])}
+						if h[1] and h[2] and h[3] and h[4] and h[5] and h[6] then
+							I=1
+							for i:number=2,no_Workers do
+								I=Working_Cull[I]<=Working_Cull[i] and I or i
+							end
+							Working_Cull[I]+=1
+							Workers_Cull[I]:SendMessage(I,userId,v,n,h)
+							tremove(Orders[userId][2],i)
+							counter+=1
+							if counter>=16 then
+								counter=0
+								break
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+end)
