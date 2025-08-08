@@ -1,0 +1,351 @@
+local WorkerID:number = tonumber(string.gsub(script.Parent.Name,"Worker",''),10)
+warn("Worker No.B{"..WorkerID.."} Ready for duty!")
+
+local MasterActor = game.ServerScriptService.ServerHandle
+--local NoiseModule = require(ServerScriptService.NoiseModule)
+
+local CullCompleated:BindableEvent = MasterActor.Events.CullCompleated
+--[[
+
+16^3 = 4096
+
+2^12 = 4096
+
+4096*16=65536
+
+log2(4096+2^16) = 69632
+
+- 16b
+block[]16b
+ * to make this easv.v.y we want to store all data in the same buffer, so we can just check the point
+
+4096*16=65536
+]]
+
+local grid:{[number]:vector}={}
+for X:number=1,16,1 do
+	for Y:number=1,16,1 do
+		for Z:number=1,16,1 do
+			grid[#grid+1]=vector.create(X,Y,Z)
+		end
+	end
+end
+
+local v3n = vector.create
+local v3m = vector.magnitude
+local v3d = vector.dot
+local v3x:vector = vector.create(1,0,0)
+local v3y:vector = vector.create(0,1,0)
+local v3z:vector = vector.create(0,0,1)
+local v3nx:vector = vector.create(0,1,1)
+local v3ny:vector = vector.create(1,0,1)
+local v3nz:vector = vector.create(1,1,0)
+local v31:vector = vector.one
+
+-- 2^16 = 4096
+-- 4096+2^16 = 69632
+-- Vov.xels:4096 + Siv.ze:2^16
+-- log2(4096+2^16) = <17
+
+local sides:{[number]:vector} = { -- 26
+	vector.create(-1,0,0),vector.create(0,-1,0),vector.create(0,0,-1),
+	vector.create(1,0,0),vector.create(0,1,0),vector.create(0,0,1)
+}
+
+local rbxor = function(a:boolean,b:boolean):boolean
+	return a~=b and (a==true or b==true)
+end
+
+local activeCorou:number=0
+local c:number=0
+local Culling = @native function (Player:Player,Position:vector,DataSet:{{number}},Padding:{{{number}}}):()
+	
+	-- turn list into arrays :(
+	local nex:{{{number}}}={}
+	
+	for _:number,v:vector in ipairs(grid) do
+		if not(DataSet[v.x] and DataSet[v.x][v.y] and DataSet[v.x][v.y][v.z]) then continue end
+		--1 0 0
+		if v.x-1==0 then
+			if not(Padding[1][16] and Padding[1][16][v.y] and Padding[1][16][v.y][v.z]) then
+				if not nex[v.x] then
+					nex[v.x]={}
+					nex[v.x][v.y]={}
+					nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+					continue
+				elseif not nex[v.x][v.y] then
+					nex[v.x][v.y]={}
+					nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+					continue
+				else
+					nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+					continue
+				end
+			end
+		elseif not(DataSet[v.x-1] and DataSet[v.x-1][v.y] and DataSet[v.x-1][v.y][v.z]) then
+			if not nex[v.x] then
+				nex[v.x]={}
+				nex[v.x][v.y]={}
+				nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+				continue
+			elseif not nex[v.x][v.y] then
+				nex[v.x][v.y]={}
+				nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+				continue
+			else
+				nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+				continue
+			end
+		end
+		-- 1 0 0
+		if v.x+1==17 then
+			if not(Padding[4][1] and Padding[4][1][v.y] and Padding[4][1][v.y][v.z]) then
+				if not nex[v.x] then
+					nex[v.x]={}
+					nex[v.x][v.y]={}
+					nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+					continue
+				elseif not nex[v.x][v.y] then
+					nex[v.x][v.y]={}
+					nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+					continue
+				else
+					nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+					continue
+				end
+			end
+		elseif not(DataSet[v.x+1] and DataSet[v.x+1][v.y] and DataSet[v.x+1][v.y][v.z]) then
+			if not nex[v.x] then
+				nex[v.x]={}
+				nex[v.x][v.y]={}
+				nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+				continue
+			elseif not nex[v.x][v.y] then
+				nex[v.x][v.y]={}
+				nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+				continue
+			else
+				nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+				continue
+			end
+		end
+		-- 0 -1 0
+		if v.y-1==0 then
+			if not(Padding[2][v.x] and Padding[2][v.x][16] and Padding[2][v.x][16][v.z]) then
+				if not nex[v.x] then
+					nex[v.x]={}
+					nex[v.x][v.y]={}
+					nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+					continue
+				elseif not nex[v.x][v.y] then
+					nex[v.x][v.y]={}
+					nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+					continue
+				else
+					nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+					continue
+				end
+			end
+		elseif not(DataSet[v.x][v.y-1] and DataSet[v.x][v.y-1][v.z]) then
+			if not nex[v.x] then
+				nex[v.x]={}
+				nex[v.x][v.y]={}
+				nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+				continue
+			elseif not nex[v.x][v.y] then
+				nex[v.x][v.y]={}
+				nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+				continue
+			else
+				nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+				continue
+			end
+		end
+		-- 0 1 0
+		if v.y+1==17 then
+			if not(Padding[5][v.x] and Padding[5][v.x][1] and Padding[5][v.x][1][v.z]) then
+				if not nex[v.x] then
+					nex[v.x]={}
+					nex[v.x][v.y]={}
+					nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+					continue
+				elseif not nex[v.x][v.y] then
+					nex[v.x][v.y]={}
+					nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+					continue
+				else
+					nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+					continue
+				end
+			end
+		elseif not(DataSet[v.x][v.y+1] and DataSet[v.x][v.y+1][v.z]) then
+			if not nex[v.x] then
+				nex[v.x]={}
+				nex[v.x][v.y]={}
+				nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+				continue
+			elseif not nex[v.x][v.y] then
+				nex[v.x][v.y]={}
+				nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+				continue
+			else
+				nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+				continue
+			end
+		end
+		-- 0 0 -1
+		if v.z-1==0 then
+			if not(Padding[3][v.x] and Padding[3][v.x][v.y] and Padding[3][v.x][v.y][16]) then
+				if not nex[v.x] then
+					nex[v.x]={}
+					nex[v.x][v.y]={}
+					nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+					continue
+				elseif not nex[v.x][v.y] then
+					nex[v.x][v.y]={}
+					nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+					continue
+				else
+					nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+					continue
+				end
+			end
+		elseif not DataSet[v.x][v.y][v.z-1] then
+			if not nex[v.x] then
+				nex[v.x]={}
+				nex[v.x][v.y]={}
+				nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+				continue
+			elseif not nex[v.x][v.y] then
+				nex[v.x][v.y]={}
+				nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+				continue
+			else
+				nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+				continue
+			end
+		end
+		-- 0 0 1
+		if v.z+1==17 then
+			if not(Padding[6][v.x] and Padding[6][v.x][v.y] and Padding[6][v.x][v.y][1]) then
+				if not nex[v.x] then
+					nex[v.x]={}
+					nex[v.x][v.y]={}
+					nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+					continue
+				elseif not nex[v.x][v.y] then
+					nex[v.x][v.y]={}
+					nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+					continue
+				else
+					nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+					continue
+				end
+			end
+		elseif not DataSet[v.x][v.y][v.z+1] then
+			if not nex[v.x] then
+				nex[v.x]={}
+				nex[v.x][v.y]={}
+				nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+				continue
+			elseif not nex[v.x][v.y] then
+				nex[v.x][v.y]={}
+				nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+				continue
+			else
+				nex[v.x][v.y][v.z]=DataSet[v.x][v.y][v.z]
+				continue
+			end
+		end
+	end
+	
+	local w:number,h:number,l:number
+	local rowG:boolean
+
+	local index:number=1
+	
+	local temp:{}
+	local Voxels:{[number]:{id:number,p:vector,s:vector}}={}
+	local id:number
+	for _:number,v:vector in ipairs(grid) do
+		if not(nex[v.x] and nex[v.x][v.y] and nex[v.x][v.y][v.z]) then continue end
+		id=nex[v.x][v.y][v.z]
+		w,h,l=1,1,1
+		-- swap to zyx
+		temp=nex[v.x][v.y]
+		while v.z+l<16 and (temp and temp[v.z+l] and temp[v.z+l]==id) do
+			l+=1
+		end
+		for yo:number=v.y+1,16 do
+			rowG=true
+			temp=nex[v.x][v.y+yo]
+			for zo:number=v.z,v.z+l do
+				if not (temp and temp[zo] and temp[zo]==id) then
+					rowG=false
+					break
+				end
+			end
+			if rowG then
+				h+=1
+			else
+				break
+			end
+		end
+		for xo:number=v.x+1,16 do
+			if nex[xo] then
+				for yo:number=v.y,v.y+h do
+					rowG=true
+					temp=nex[xo][yo]
+					if temp then
+						for zo:number=v.z,v.z+l do
+							if not temp[zo] or temp[zo]~=id then
+								rowG=false
+								break
+							end
+						end
+					else
+						rowG=false
+						break
+					end
+					if not rowG then
+						break
+					end
+				end
+			else
+				break
+			end
+			if rowG then
+				w+=1
+			else
+				break
+			end
+		end
+		
+		Voxels[index]={
+			id=nex[v.x][v.y][v.z],
+			p=v*5,
+			s=v3n(w,h,l)*5
+		}
+		
+		for xo:number=v.x,v.x+w-1 do
+			if nex[xo] then
+				for yo:number=v.y,v.y+h-1 do
+					if nex[xo][yo] then
+						temp=nex[xo][yo]
+						for zo:number=v.z,v.z+l-1 do
+							if temp[zo] then
+								temp[zo]=nil
+							end
+						end
+					end
+				end
+			end
+		end
+		index+=1
+	end
+	
+	MasterActor:SendMessage("FinishedCull",WorkerID,Player,Position,Voxels)
+end
+script.Parent:BindToMessageParallel(WorkerID,function(Player:Player,Position:vector,DataSet:{},Padding:{})
+	task.defer(coroutine.create(Culling),Player,Position,DataSet,Padding)
+end)
