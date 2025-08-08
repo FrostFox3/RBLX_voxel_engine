@@ -1,0 +1,255 @@
+--!native
+--!optimize 2
+
+local WorkerID:number = tonumber(string.gsub(script.Parent.Name,"Worker",''),10)::number
+warn("Worker No.N{"..WorkerID.."} Ready for duty!")
+
+local MasterActor = game.ServerScriptService.ServerHandle
+local NoiseModule = require(MasterActor.NoiseModule)
+local DataBase = require(MasterActor.DataBase)
+
+local NoiseCompleated:BindableEvent = MasterActor.Events.NoiseCompleated
+--[[
+
+16^3 = 4096
+
+16^2 = 256
+16^2*4 = 1024
+
+2^12 = 4096
+
+4096*16=65536
+
+log2(4096+2^16) = 268435456
+
+- 16b
+block[]16b
+ * to make this easy we want to store all data in the same buffer, so we can just check the point
+
+4096*16=65536
+]]
+
+-- Voxels:4096 * Size:2^32
+-- 4096*2^32 = 17592186044416 ; 17,592,186,044,416
+
+-- log2(4096*2^32) = 44
+-- 2^12 * 2^32
+
+-- 1073741824 bytes = 
+-- 8589934592 = 33 bits
+-- 17592186044416 bits = 44
+
+-- Voxels:2^12 * Size:2^16 
+-- 4096*2^16 = 268435456 ; 268,435,456
+
+-- log2(4096*2^16) = 28
+-- 2^12 * 2^16
+
+-- 1073741824 bytes = 
+-- 8589934592 = 33 bits
+-- 268435456 bits = 28
+
+local ceil = math.ceil
+local abs = math.abs
+
+local MaxBlockAmount:number = 2^16
+local BufferSize_Max:number = 16^3*MaxBlockAmount
+
+local ChunkPoints:{vector}={}
+for x:number=1,16 do -- 16^3
+	for y:number=1,16 do
+		for z:number=1,16 do
+			ChunkPoints[#ChunkPoints+1]=vector.create(x,y,z)
+		end
+	end
+end
+
+local v3n = vector.create
+local v3m = vector.magnitude
+local v3x:vector=vector.create(1,0,0)
+local v3y:vector=vector.create(0,1,0)
+local v3z:vector=vector.create(0,0,1)
+local v3nx:vector=vector.create(0,1,1)
+local v3ny:vector=vector.create(1,0,1)
+local v3nz:vector=vector.create(1,1,0)
+local v31:vector=vector.one
+
+local v3f = vector.floor
+
+local Size:{
+	S0:number,
+	S1:number,
+	S2:number,
+	S0_:number,
+	S1_:number,
+	S2_:number
+} = {
+	S0=0,
+	S1=0,
+	S2=0,
+	S0_=0,
+	S1_=0,
+	S2_=0
+}
+Size.S0 = 80*2^2
+Size.S1 = 80*2^1
+Size.S2 = 80*2^0
+Size.S0_ = 1/Size.S0
+Size.S1_ = 1/Size.S1
+Size.S2_ = 1/Size.S2
+
+-- chunkPos:vector,Player:Player
+local seed = game.ServerStorage.Seed
+local interpo = function (p:vector,aaa:number,baa:number,aba:number,bba:number,aab:number,bab:number,abb:number,bbb:number):number
+	p=v3n(p.x>1 and 1 or p.x<-1 and -1 or p.x,p.y>1 and 1 or p.y<-1 and -1 or p.y,p.z>1 and 1 or p.z<-1 and -1 or p.z)
+	p*=p*(v31*3-2*p)
+	return (1-p.z)*((1-p.y)*((1-p.x)*aaa+p.x*baa)+p.y*((1-p.x)*aba+p.x*bba))+p.z*((1-p.y)*((1-p.x)*aab+p.x*bab)+p.y*((1-p.x)*abb+p.x*bbb))
+end
+
+-- -1...1
+local NoiseStorage = {
+	
+	caves={},
+	paint={}, -- tipicaly you should have paint for each individual biomes : it refers to the closest guess
+}
+local VectorList = {
+	caves={},
+	paint={},
+}
+
+local Insert_Noise = function (Index:string,foo:((a...)->(b...)),h:number,w:number,f:number):()
+	if not NoiseStorage[Index][h] then
+		NoiseStorage[Index][h]={}
+		NoiseStorage[Index][h][w]={}
+		NoiseStorage[Index][h][w][f]=foo
+	elseif not NoiseStorage[Index][h][w] then
+		NoiseStorage[Index][h][w]={}
+		NoiseStorage[Index][h][w][f]=foo
+	elseif not NoiseStorage[Index][h][w][f] then
+		NoiseStorage[Index][h][w][f]=foo
+	else
+		warn(Index.." noise { "..h.." : "..w.." : "..f.." } Exists already")
+	end
+end
+
+Insert_Noise("caves",function(p:vector,h:number,w:number,f:number) -- Cold Dry Unfertile : Glacer
+	local n:number=NoiseModule.worley(p*(.001563+w*.000313+.000313),seed.Value)
+	n+=NoiseModule.worley(p*(.001563+w*.000313+.000313),seed.Value*2)
+	return n*.5-.7
+end,0,0,0)
+Insert_Noise("caves",function(p:vector,h:number,w:number,f:number) -- bland : Cave
+	local n:number=NoiseModule.simplex(p*(.003125+w*.000625+.000625),seed.Value)*.5
+	local m:number=1/(1+f*(.6-n*n))
+	n*=m
+	n+=NoiseModule.simplex(p*(.00625+w*.00125+.00125),seed.Value)*.25
+	m+=1/(1+f*(.6-n*n))
+	n*=m
+	n+=NoiseModule.simplex(p*(.0125+w*.0025+.0025),seed.Value)*.125
+	return n*(m+1/(1+f*(.6-n*n)))
+end,100,100,100)
+Insert_Noise("caves",function(p:vector,h:number,w:number,f:number) -- HOT DAMP AND FERTILE : Sulfer
+	local n:number=NoiseModule.simplex(p*(.00313+w*.00073+.00073),seed.Value*6)*.5
+	local m:number=1/(1+f*(.6-n*n))
+	n*=m
+	n+=NoiseModule.simplex(p*(.0062+w*.0033+.0033),seed.Value*6)*.25
+	m+=1/(1+f*(.6-n*n))
+	n*=m
+	n+=NoiseModule.simplex(p*(.012+w*.0035+.0035),seed.Value*6)*.125
+	return n*(m+1/(1+f*(.6-n*n)))
+end,200,200,200)
+
+for x:number,v in pairs(NoiseStorage.caves) do
+	for y:number,v in pairs(v) do
+		for z:number,_ in pairs(v) do
+			VectorList.caves[#VectorList.caves+1]=v3n(x,y,z)
+		end
+	end
+end
+for x:number,v in pairs(NoiseStorage.paint) do
+	for y:number,v in pairs(v) do
+		for z:number,_ in pairs(v) do
+			VectorList.paint[#VectorList.paint+1]=v3n(x,y,z)
+		end
+	end
+end
+table.sort(VectorList.caves,function(a:vector,b:vector)
+	return -- mag sort, linear sort, dot sort?
+end)
+
+-- The actual Noise generation
+local Noise = function(UserId:number,ChunkPosition:vector):()
+	local p:vector
+	local n:number
+	local heat:number
+	local wet:number
+	local frt:number
+	
+	local Back_:vector=v3f(ChunkPosition*.0000125)*80000
+	heat=interpo(ChunkPosition*.0000125-v3f(ChunkPosition*.0000125),NoiseModule.simplex(Back_,seed.Value*10),NoiseModule.simplex(Back_+v3x*80000,seed.Value*10),
+		NoiseModule.simplex(Back_+v3y*80000,seed.Value*10),NoiseModule.simplex(Back_+v3nz*80000,seed.Value*10),
+		NoiseModule.simplex(Back_+v3z*80000,seed.Value*10),NoiseModule.simplex(Back_+v3ny*80000,seed.Value*10),
+		NoiseModule.simplex(Back_+v3nx*80000,seed.Value*10),NoiseModule.simplex(Back_+v31*80000,seed.Value*10))
+	Back_=v3f(ChunkPosition*.000025)*40000
+	wet=interpo(ChunkPosition*.000025-v3f(ChunkPosition*.000025),NoiseModule.simplex(Back_,seed.Value*9),NoiseModule.simplex(Back_+v3x*40000,seed.Value*9),
+		NoiseModule.simplex(Back_+v3y*40000,seed.Value*9),NoiseModule.simplex(Back_+v3nz*40000,seed.Value*9),
+		NoiseModule.simplex(Back_+v3z*40000,seed.Value*9),NoiseModule.simplex(Back_+v3ny*40000,seed.Value*9),
+		NoiseModule.simplex(Back_+v3nx*40000,seed.Value*9),NoiseModule.simplex(Back_+v31*40000,seed.Value*9))
+	Back_=v3f(ChunkPosition*.0000625)*16000
+	frt=interpo(ChunkPosition*.0000625-v3f(ChunkPosition*.0000625),NoiseModule.simplex(Back_,seed.Value*8),NoiseModule.simplex(Back_+v3x*16000,seed.Value*8),
+		NoiseModule.simplex(Back_+v3y*16000,seed.Value*8),NoiseModule.simplex(Back_+v3nz*16000,seed.Value*8),
+		NoiseModule.simplex(Back_+v3z*16000,seed.Value*8),NoiseModule.simplex(Back_+v3ny*16000,seed.Value*8),
+		NoiseModule.simplex(Back_+v3nx*16000,seed.Value*8),NoiseModule.simplex(Back_+v31*16000,seed.Value*8))
+	
+	local m:number = 0 -- 0 to BufferSize_Max
+	
+	local CaveNoises:{(a...)->(b...)}=table.clone(VectorList.caves)
+	local PaintNoises:{(a...)->(b...)}=table.clone(VectorList.caves)
+	local HeatDistance:{number}={}
+	p=v3n(heat,wet,frt)*100+v31*200
+	
+	table.sort(CaveNoises,function(a:vector,b:vector)
+		a-=p
+		b-=p
+		return a.x*a.x+a.y*a.y+a.z*a.z<b.x*b.x+b.y*b.y+b.z*b.z
+	end)
+	table.sort(PaintNoises,function(a:vector,b:vector)
+		a-=p
+		b-=p
+		return a.x*a.x+a.y*a.y+a.z*a.z<b.x*b.x+b.y*b.y+b.z*b.z
+	end)
+	HeatDistance[1]=CaveNoises[1]-p
+	HeatDistance[2]=CaveNoises[2]-p
+	HeatDistance[3]=CaveNoises[3]-p
+	HeatDistance[1]=(HeatDistance[1].x*HeatDistance[1].x+HeatDistance[1].y*HeatDistance[1].y+HeatDistance[1].z*HeatDistance[1].z)^.5
+	HeatDistance[2]=(HeatDistance[2].x*HeatDistance[2].x+HeatDistance[2].y*HeatDistance[2].y+HeatDistance[2].z*HeatDistance[2].z)^.5
+	HeatDistance[3]=(HeatDistance[3].x*HeatDistance[3].x+HeatDistance[3].y*HeatDistance[3].y+HeatDistance[3].z*HeatDistance[3].z)^.5
+
+	local Storage:{[number]:{}}={}
+	local b:boolean
+	local v:vector
+	for i:number=1,4096,1 do
+		v=ChunkPoints[i]
+		p=ChunkPosition+v*5
+		
+		n=NoiseStorage.caves[CaveNoises[1].x][CaveNoises[1].y][CaveNoises[1].z](p,heat,wet,frt)*HeatDistance[1]
+		n+=NoiseStorage.caves[CaveNoises[2].x][CaveNoises[2].y][CaveNoises[2].z](p,heat,wet,frt)*HeatDistance[2]
+		n+=NoiseStorage.caves[CaveNoises[3].x][CaveNoises[3].y][CaveNoises[3].z](p,heat,wet,frt)*HeatDistance[3]
+		
+		if n>0 and NoiseModule.simplex(p*(.025+wet*.005+.005),seed.Value)*4+(p.x*p.x+p.y*p.y+p.z*p.z)^.5>=60 then
+			if not Storage[v.x] then
+				Storage[v.x]={}
+				Storage[v.x][v.y]={}
+				Storage[v.x][v.y][v.z]=math.floor(math.abs(frt)*10000)*.0001
+			elseif not Storage[v.x][v.y] then
+				Storage[v.x][v.y]={}
+				Storage[v.x][v.y][v.z]=math.floor(math.abs(frt)*10000)*.0001
+			else
+				Storage[v.x][v.y][v.z]=math.floor(math.abs(frt)*10000)*.0001
+			end
+		end
+	end
+	MasterActor:SendMessage("FinishedNoise",WorkerID,UserId,ChunkPosition,Storage)
+end
+script.Parent:BindToMessageParallel(WorkerID,function(UserId:number,ChunkPosition:vector)
+	task.defer(coroutine.create(Noise),UserId,ChunkPosition)
+end)
